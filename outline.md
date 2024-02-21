@@ -38,10 +38,14 @@ Depending on whether our calculated IV is greater or less than the IV in the dat
 * We will analyze the strategy with respect to individual contract combinations, which we can then consolidate. We will set the capital arbitrarily, and then we can modify our strategy parameters (ie. IV for position side, RSI/regression) to decide which trades were made out of the simulations.
 * Trading cost assumptions/leverage/borrowing costs
 
+
+
+
 ---
 
 ### To-do
 
-Confirm data - what we have between days strikes
+Confirm data - are the missing values in calls contained under puts?
 Graph of ATM deltas for expiry, IV vs given IV, something else
 Benchmark - hf returns or just hold the market
+Calculate black scholes to fill in; Consider IV reversal as a closing strat?
