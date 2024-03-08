@@ -271,8 +271,6 @@ def compare_strike_prices_and_exdates(calls_df, puts_df):
     return merged_df[merged_df['data_match'] == False]['date']
 
 
-
-
 # ============================================
 
 # Simulation Code
@@ -350,6 +348,44 @@ def create_simulations(options_subset, data, dropna_greeks=False):
 # ============================================
 
 # IV calculations
+
+def load_and_transform_tbills(file_path):
+    tbills = pd.read_csv(file_path)
+    tbills = tbills.rename(columns={
+        'TMATDT': 'maturity_date',
+        'CALDT': 'quote_date',
+        'TDNOMPRC': 'price',
+        'TDDURATN': 'dte'
+    })
+    tbills = tbills.iloc[:, [2, 6, 9, 10]]
+    tbills['maturity_date'] = pd.to_datetime(tbills['maturity_date'])
+    tbills['quote_date'] = pd.to_datetime(tbills['quote_date'])
+    return tbills
+
+def load_and_transform_calls(file_path):
+    calls = pd.read_csv(file_path)
+    calls['date_x'] = pd.to_datetime(calls['date_x'])
+    calls['exdate'] = pd.to_datetime(calls['exdate'])
+    calls['dte'] = (calls['exdate'] - calls['date_x']).dt.days
+    return calls
+
+def load_and_transform_puts(file_path):
+    puts = pd.read_csv(file_path)
+    puts['date_x'] = pd.to_datetime(puts['date_x'])
+    puts['exdate'] = pd.to_datetime(puts['exdate'])
+    puts['dte'] = (puts['exdate'] - puts['date_x']).dt.days
+    return puts
+
+def load_and_transform_option_data(file_path):
+    option_data = pd.read_csv(file_path)
+    option_data['midpt'] = (option_data['best_bid'] + option_data['best_offer']) / 2
+    option_data['date'] = pd.to_datetime(option_data['date'])
+    option_data['exdate'] = pd.to_datetime(option_data['exdate'])
+    option_data['dte'] = (option_data['exdate'] - option_data['date']).dt.days
+    return option_data
+
+
+
 
 def find_closest_index(val, col2):
     return np.abs(col2 - val).idxmin()
@@ -651,21 +687,24 @@ def preprocess_options(options_df):
     volumes['volume_med'] = (volumes['volume_c'] + volumes['volume_p']) / 2
     return volumes
 
-def pos_size(IV_diff, strike_price, option_cost_basis, UID, key, volumes_df, trades_dfs):
+def pos_size(IV_diff, strike_price, option_cost_basis, UID, key, volumes_df, trades_dfs, KAPITAL = 1e7):
     volume = min(volumes_df.loc[volumes_df['UID'] == UID, 'volume_med'].item(), 50)
-    factor = max(volume * strike_price / 10, 1)  # Ensure factor is not zero
+
+    # Calculating position size based on attractiveness while ensuring risk stays within limits and capital remains bounded
+    factor = min(min(abs(IV_diff), 0.8) * volume * strike_price / 10, KAPITAL / 10)
 
     if option_cost_basis == 0:
         filtered_df = trades_dfs[key].loc[trades_dfs[key]['UID'] == UID, 'option_cost_basis']
         option_cost_basis = filtered_df.iloc[0] if not filtered_df.empty else 0
 
-    return round(abs(IV_diff) / abs(option_cost_basis) * factor) if option_cost_basis != 0 else 0
+    # Requires a whole number of options contracts
+    return round(factor / abs(option_cost_basis)) if option_cost_basis != 0 else 0
 
-def update_trades_with_pos_size(trades_dfs, volumes):
+def update_trades_with_pos_size(trades_dfs, volumes, KAPITAL):
     for key, df in trades_dfs.items():
         df = df.drop(columns=[col for col in df.columns if col.endswith('_p') or col.endswith('_c')]).copy()
 
-        df['pos_size'] = df.apply(lambda row: pos_size(row['IV_diff'], row['strike_price'], row['option_cost_basis'], row['UID'], key, volumes, trades_dfs), axis=1)
+        df['pos_size'] = df.apply(lambda row: pos_size(row['IV_diff'], row['strike_price'], row['option_cost_basis'], row['UID'], key, volumes, trades_dfs, KAPITAL = 1e7), axis=1)
         lot_size = 100 * df['pos_size']
 
         for col in ['stock_pos', 'pos_change', 'change_cost_basis', 'stock_cost_basis', 'daily_stock_value', 'stock_PL', 'option_cost_basis',
@@ -699,7 +738,7 @@ def calculate_dividends(PL_temp_dfs, spy_divdata):
     divvies = {}
     for key, df in PL_temp_dfs.items():
         df['date'] = pd.to_datetime(df['date'])
-        df['pay_date']  = pd.to_datetime(df['pay_date'])
+        #df['pay_date']  = pd.to_datetime(df['pay_date'])
         temp_merged = pd.merge(spy_divdata, df[['date', 'sized_stock_pos']], how='left', on='date')
         temp_merged['div'] = temp_merged['sized_stock_pos'] * temp_merged['dividend']
         divvies[key] = temp_merged
@@ -830,7 +869,7 @@ def process_pl_dfs(PL_temp_dfs, rfr, INITIAL, KAPITAL):
 # Original calculate PL function for mass simulation
 # NOT USED LATER - for doc purposes only (in the appendix)
 
-def calculate_realized_PL(df, long_op=True):
+def calculate_realized_PL1(df, long_op=True):
     df = df.reset_index(drop=True)  
     df['stock_pos'] = df['shares_held'] if long_op else -df['shares_held']
     df['avg_cost'] = np.nan
