@@ -651,21 +651,24 @@ def preprocess_options(options_df):
     volumes['volume_med'] = (volumes['volume_c'] + volumes['volume_p']) / 2
     return volumes
 
-def pos_size(IV_diff, strike_price, option_cost_basis, UID, key, volumes_df, trades_dfs):
+def pos_size(IV_diff, strike_price, option_cost_basis, UID, key, volumes_df, trades_dfs, KAPITAL = 1e7):
     volume = min(volumes_df.loc[volumes_df['UID'] == UID, 'volume_med'].item(), 50)
-    factor = max(volume * strike_price / 10, 1)  # Ensure factor is not zero
+
+    # Calculating position size based on attractiveness while ensuring risk stays within limits and capital remains bounded
+    factor = min(min(abs(IV_diff), 0.8) * volume * strike_price / 10, KAPITAL / 10)
 
     if option_cost_basis == 0:
         filtered_df = trades_dfs[key].loc[trades_dfs[key]['UID'] == UID, 'option_cost_basis']
         option_cost_basis = filtered_df.iloc[0] if not filtered_df.empty else 0
 
-    return round(abs(IV_diff) / abs(option_cost_basis) * factor) if option_cost_basis != 0 else 0
+    # Requires a whole number of options contracts
+    return round(factor / abs(option_cost_basis)) if option_cost_basis != 0 else 0
 
-def update_trades_with_pos_size(trades_dfs, volumes):
+def update_trades_with_pos_size(trades_dfs, volumes, KAPITAL):
     for key, df in trades_dfs.items():
         df = df.drop(columns=[col for col in df.columns if col.endswith('_p') or col.endswith('_c')]).copy()
 
-        df['pos_size'] = df.apply(lambda row: pos_size(row['IV_diff'], row['strike_price'], row['option_cost_basis'], row['UID'], key, volumes, trades_dfs), axis=1)
+        df['pos_size'] = df.apply(lambda row: pos_size(row['IV_diff'], row['strike_price'], row['option_cost_basis'], row['UID'], key, volumes, trades_dfs, KAPITAL = 1e7), axis=1)
         lot_size = 100 * df['pos_size']
 
         for col in ['stock_pos', 'pos_change', 'change_cost_basis', 'stock_cost_basis', 'daily_stock_value', 'stock_PL', 'option_cost_basis',
