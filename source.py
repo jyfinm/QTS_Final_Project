@@ -1761,7 +1761,8 @@ def combined_performance_metrics(spydata, *dfs, rfr=0.01):
     """
     if 'returns' not in spydata.columns:
         raise ValueError("Benchmark data must contain 'returns' column")
-    benchmark_returns_monthly = spydata['returns'].resample('M').mean()
+    benchmark_returns_monthly = spydata['spy_return1'].resample('Y').last().pct_change()
+    benchmark_returns_monthly[0] = spydata['spy_return1'].resample('Y').last()[0] - 1
 
     metrics_dict = {}
 
@@ -1769,18 +1770,19 @@ def combined_performance_metrics(spydata, *dfs, rfr=0.01):
         if not {'daily_net_PL', 'initial_kapital'}.issubset(df.columns):
             raise ValueError(f"DataFrame {idx} is missing required columns.")
 
-        df['daily_returns'] = df['daily_net_PL'] / df['initial_kapital']
-        annualized_return = df['daily_returns'].mean() * 252
+        df['daily_returns'] = df['net_pos_value'].pct_change()
+        annualized_return = (df['net_pos_value'].iloc[-1] / df['net_pos_value'].iloc[0]) ** (1/((df['net_pos_value'].index[-1] - df['net_pos_value'].index[0]).total_seconds() / (365.25 * 24 * 60 * 60))) - 1
         annualized_volatility = df['daily_returns'].std() * np.sqrt(252)
         sharpe_ratio = (annualized_return - rfr) / annualized_volatility
 
-        fund_ret_monthly = df['daily_returns'].resample('M').mean()
+        fund_ret_monthly = df['net_pos_value'].resample('Y').last().pct_change()
+        fund_ret_monthly[0] = df['net_pos_value'].resample('Y').last()[0]/1e6 - 1
         X = sm.add_constant(benchmark_returns_monthly)  
         y = fund_ret_monthly
         model = sm.OLS(y, X, missing='drop').fit()
         beta = round(float(model.params[1]), 8)  
         alpha = round(float(model.params[0]), 6)
-        tracking_error = round(model.resid.std() * np.sqrt(12), 6)
+        tracking_error = round(model.resid.std(), 6)
         information_ratio = round(alpha / tracking_error, 6) if tracking_error != 0 else np.nan
         r_squared = round(model.rsquared, 6)
 
