@@ -1714,9 +1714,34 @@ def plot_net_pos_val(combined_1, combined_2, combined_3):
     plt.show()
 
 # ============================================
-    
-# Appendices
 
-# ============================================
-# ============================================
+def max_drawdown(returns):
+    local_max = [n for n in range(len(returns)-1) if ((n==0) and (returns.iloc[0] > returns.iloc[1])) or 
+       ((n > 0) and (returns.iloc[n-1] < returns.iloc[n]) and (returns.iloc[n+1] < returns.iloc[n]))] 
+    
+    local_min = [n for n in range(1, len(returns)) if ((n == len(returns)-1) and (returns.iloc[-1] < returns.iloc[-2])) or
+            (returns.iloc[n-1] > returns.iloc[n]) and (returns.iloc[n+1] > returns.iloc[n])]
+    
+    def next_local_min(n):
+        mins_after_n = [m for m in local_min if m > n]
+        return mins_after_n[0] if mins_after_n else None
+    
+    drawdowns = [(n, next_local_min(n)) for n in local_max]
+    drawdown_values = [returns.iloc[n] - returns.iloc[m] for (n, m) in drawdowns if m is not None]
+    
+    return np.max(drawdown_values) if drawdown_values else 0.0
+
+def max_dd(returns):
+    # Use .values to work with the underlying numpy array for compatibility
+    cum_max = np.maximum.accumulate(returns.values)
+    drawdown = cum_max - returns.values
+    i = np.argmax(drawdown)  # Position of the max drawdown
+    j = np.argmax(returns.values[:i])  # Position of the peak before the max drawdown
+    
+    plt.plot(returns.index, returns.values)  # Plot using the index for x-axis
+    plt.plot([returns.index[i], returns.index[j]], [returns.values[i], returns.values[j]], 'o', color='Red', markersize=10)
+    
+    max_drawdown_value = np.abs(returns.values[j] - returns.values[i]) / returns.values[j]
+    print(max_drawdown_value)
+    return max_drawdown_value
 
