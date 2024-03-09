@@ -4,61 +4,59 @@ Source file containing all functions used in the notebook, imported directly.
 """
 # ============================================
 
-import sys
-import math
-import warnings
-
-import psycopg2
-import wrds
-import gzip
-
-import seaborn as sns
-import os
-import quandl
-import json
-import zipfile
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
-
-import functools
-import requests
-import io
-
-from matplotlib.ticker import PercentFormatter
-import urllib.request
-from urllib.error import HTTPError
-# from html_table_parser.parser import HTMLTableParser
-#from bs4 import BeautifulSoup
-import re
-
-import plotnine as p9
-from plotnine import ggplot, scale_x_date, guides, guide_legend, geom_bar, scale_y_continuous, \
-    scale_color_identity, geom_line, geom_point, labs, theme_minimal, theme, element_blank, element_text, \
-        geom_ribbon, geom_hline, aes, scale_size_manual, scale_color_manual, ggtitle
-
-from datetime import datetime
+# Standard
+import bisect
+import collections
 import datetime
+import gzip
+import io
+import json
+import math
+import os
+import re
+import sys
+import urllib.request
+import zipfile
 
-import pandas as pd
-# import pandas_market_calendars as mcal
-from pandas.plotting import autocorrelation_plot
+# Third-party
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
-from numpy import cumsum, log, polyfit, sqrt, std, subtract
-import scipy as sp
-from scipy.stats import norm
-import scipy.stats as stats
-
-from statsmodels.tsa.stattools import coint
-from statsmodels.graphics.tsaplots import plot_acf
+import pandas as pd
+import plotnine as p9
+import psycopg2
+import requests
+import scipy
+import scipy.stats
+import seaborn as sns
 import statsmodels.api as sm
-from statsmodels.tsa.stattools import acf, adfuller
-from statsmodels.regression.linear_model import OLS
-from statsmodels.tools.tools import add_constant
+import statsmodels.graphics.tsaplots
+import statsmodels.regression.linear_model
+import statsmodels.stats.stattools
+import statsmodels.tools
+import wrds
+import quandl
 
-from collections import deque
+# Specific
 from bisect import insort, bisect_left
+from collections import deque
+from datetime import datetime
 from itertools import islice
+from matplotlib.ticker import PercentFormatter
+from plotnine import (aes, geom_bar, geom_hline, geom_line, geom_point, geom_ribbon, ggplot, 
+                      guide_legend, guides, labs, scale_color_identity, scale_color_manual, 
+                      scale_size_manual, scale_x_date, scale_y_continuous, theme, theme_minimal,
+                      element_blank, element_text, ggtitle)
+from scipy.stats import norm
+from statsmodels.graphics.tsaplots import plot_acf
+from statsmodels.regression.linear_model import OLS
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tools.tools import add_constant
+from statsmodels.tsa.stattools import acf, coint
 
+# Warnings
+import warnings
+warnings.filterwarnings("ignore")
 
 
 # ============================================
@@ -931,7 +929,794 @@ def calculate_realized_PL1(df, long_op=True):
 
 
 # ============================================
+
+# Analysis Helpers
+
+def performance_summary(cumulative_pl):
+    """
+    Returns the Performance Stats for a given set of data.
+    
+    Inputs: 
+        data - DataFrame with Date index and corresponding financial data.
+    
+    Output:
+        summary_stats - DataFrame with summary statistics.
+    """
+    daily_returns = cumulative_pl
+    
+    summary_stats = pd.DataFrame()
+    summary_stats['Mean'] = daily_returns.mean()
+    summary_stats['Median'] = daily_returns.median()
+    summary_stats['Volatility'] = daily_returns.std() 
+    summary_stats['Sharpe Ratio'] = summary_stats['Mean'] / summary_stats['Volatility']
+    summary_stats['Skewness'] = daily_returns.skew()
+    summary_stats['Excess Kurtosis'] = daily_returns.kurtosis()
+    summary_stats['Min'] = daily_returns.min()
+    summary_stats['Max'] = daily_returns.max()
+
+    wealth_index = 1000 * (1 + daily_returns)
+    previous_peaks = wealth_index.cummax()
+    drawdowns = (wealth_index - previous_peaks) / previous_peaks
+    summary_stats['Max Drawdown'] = drawdowns.min()
+    
+    return summary_stats
+
+def plot_trades_over_time(*cumulative_pls):
+    """
+    Plots gross option trades and gross stock trades over time for multiple trading strategies.
+    
+    Inputs:
+        cumulative_pls - Tuple of DataFrames, each with Date index and financial data including
+                         gross_option_trades and gross_stock_trades.
+    """
+    fig, axs = plt.subplots(2, len(cumulative_pls), figsize=(12 * len(cumulative_pls), 8))  
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        axs[0, i].plot(cumulative_pl.index, cumulative_pl['gross_option_trades'], color='blue', marker='o', linestyle='-')
+        axs[0, i].set_title(f'Gross Option Trades Over Time: Strategy {i+1}')  
+        axs[0, i].set_xlabel('Date')  # X-axis label
+        axs[0, i].set_ylabel('Gross Option Trades')  
+        axs[0, i].grid(True)  
+
+        axs[1, i].plot(cumulative_pl.index, cumulative_pl['gross_stock_trades'], color='red', marker='o', linestyle='-')
+        axs[1, i].set_title(f'Gross Stock Trades Over Time: Strategy {i+1}')  
+        axs[1, i].set_xlabel('Date')  
+        axs[1, i].set_ylabel('Gross Stock Trades')  
+        axs[1, i].grid(True)  
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_position_values_over_time(*cumulative_pls):
+    """
+    Plots option position value and stock position value over time for multiple trading strategies.
+    
+    Inputs:
+        cumulative_pls - Tuple of DataFrames, each with Date index and financial data including
+                         option_pos_value and stock_pos_value.
+    """
+    # Determine the number of trading strategies (dataframes)
+    num_strategies = len(cumulative_pls)
+    fig, axs = plt.subplots(2, num_strategies, figsize=(12 * num_strategies, 8), squeeze=False)  
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        axs[0, i].plot(cumulative_pl.index, cumulative_pl['option_pos_value'], color='green', marker='o', linestyle='-')
+        axs[0, i].set_title(f'Option Position Value Over Time: Strategy {i+1}')  
+        axs[0, i].set_xlabel('Date')  # X-axis label
+        axs[0, i].set_ylabel('Option Position Value ($)')  
+        axs[0, i].grid(True)  
+
+        axs[1, i].plot(cumulative_pl.index, cumulative_pl['stock_pos_value'], color='purple', marker='o', linestyle='-')
+        axs[1, i].set_title(f'Stock Position Value Over Time: Strategy {i+1}')  
+        axs[1, i].set_xlabel('Date')  
+        axs[1, i].set_ylabel('Stock Position Value ($)')  
+        axs[1, i].grid(True)  
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_trading_costs_over_time(*cumulative_pls):
+    """
+    Plots stock trading costs, option trading costs, and net trading costs over time for multiple trading strategies.
+    
+    Inputs:
+        cumulative_pls - Tuple of DataFrames, each with Date index and financial data including
+                         stock_trading_costs, option_trading_costs, and net_trading_costs.
+    """
+    # Determine the number of trading strategies (dataframes)
+    num_strategies = len(cumulative_pls)
+    fig, axs = plt.subplots(3, num_strategies, figsize=(12 * num_strategies, 12), squeeze=False)  # Adjust for three rows
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        # Plot stock trading costs
+        axs[0, i].plot(cumulative_pl.index, cumulative_pl['stock_trading_costs'], color='blue', marker='o', linestyle='-')
+        axs[0, i].set_title(f'Stock Trading Costs Over Time: Strategy {i+1}')  
+        axs[0, i].set_xlabel('Date')  
+        axs[0, i].set_ylabel('Stock Trading Costs ($)')  
+        axs[0, i].grid(True)  
+
+        # Plot option trading costs
+        axs[1, i].plot(cumulative_pl.index, cumulative_pl['option_trading_costs'], color='red', marker='o', linestyle='-')
+        axs[1, i].set_title(f'Option Trading Costs Over Time: Strategy {i+1}')  
+        axs[1, i].set_xlabel('Date')  
+        axs[1, i].set_ylabel('Option Trading Costs ($)')  
+        axs[1, i].grid(True)
+
+        # Plot net trading costs
+        axs[2, i].plot(cumulative_pl.index, cumulative_pl['net_trading_costs'], color='green', marker='o', linestyle='-')
+        axs[2, i].set_title(f'Net Trading Costs Over Time: Strategy {i+1}')  
+        axs[2, i].set_xlabel('Date')  
+        axs[2, i].set_ylabel('Net Trading Costs ($)')  
+        axs[2, i].grid(True)  
+
+    plt.tight_layout()
+    plt.show()
+
+def calculate_daily_pl(df):
+    """
+    Calculates daily P&L by taking the difference of cumulative P&L values and adds them to the DataFrame.
+
+    Inputs:
+        df - DataFrame with 'option_PL', 'stock_PL', and 'net_PL' columns.
+
+    Returns:
+        DataFrame with added 'daily_option_PL', 'daily_stock_PL', and 'daily_net_PL' columns.
+    """
+    df['daily_option_PL'] = df['option_PL'].diff().fillna(0)  # Using fillna(0) for the first difference which will be NaN
+    df['daily_stock_PL'] = df['stock_PL'].diff().fillna(0)
+    df['daily_net_PL'] = df['net_PL'].diff().fillna(0)
+    return df
+
+def plot_pl_over_time(*cumulative_pls):
+    """
+    Plots option, stock, and net P&L values over time for multiple trading strategies.
+    
+    Inputs:
+        cumulative_pls - Tuple of DataFrames, each with Date index and financial data.
+    """
+    # Determine the number of trading strategies (dataframes)
+    num_strategies = len(cumulative_pls)
+    fig, axs = plt.subplots(3, num_strategies, figsize=(12 * num_strategies, 12), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        axs[0, i].plot(cumulative_pl.index, cumulative_pl['daily_option_PL'], color='orange', marker='o', linestyle='-')
+        axs[0, i].set_title(f'Option P&L Over Time: Strategy {i+1}')
+        axs[0, i].set_xlabel('Date')
+        axs[0, i].set_ylabel('Option P&L ($)')
+        axs[0, i].grid(True)
+        
+        axs[1, i].plot(cumulative_pl.index, cumulative_pl['daily_stock_PL'], color='cyan', marker='o', linestyle='-')
+        axs[1, i].set_title(f'Stock P&L Over Time: Strategy {i+1}')
+        axs[1, i].set_xlabel('Date')
+        axs[1, i].set_ylabel('Stock P&L ($)')
+        axs[1, i].grid(True)
+        
+        axs[2, i].plot(cumulative_pl.index, cumulative_pl['daily_net_PL'], color='magenta', marker='o', linestyle='-')
+        axs[2, i].set_title(f'Net P&L Over Time: Strategy {i+1}')
+        axs[2, i].set_xlabel('Date')
+        axs[2, i].set_ylabel('Net P&L ($)')
+        axs[2, i].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_cumulative_pl_over_time(*cumulative_pls):
+    """
+    Plots cumulative option, stock, and net P&L values over time for multiple trading strategies.
+    
+    Inputs:
+        cumulative_pls - Tuple of DataFrames, each with Date index and financial data.
+    """
+    # Determine the number of trading strategies (dataframes)
+    num_strategies = len(cumulative_pls)
+    fig, axs = plt.subplots(3, num_strategies, figsize=(12 * num_strategies, 12), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        axs[0, i].plot(cumulative_pl.index, cumulative_pl['option_PL'], color='orange', marker='o', linestyle='-')
+        axs[0, i].set_title(f'Cumulative Option P&L Over Time: Strategy {i+1}')
+        axs[0, i].set_xlabel('Date')
+        axs[0, i].set_ylabel('Cumulative Option P&L ($)')
+        axs[0, i].grid(True)
+        
+        axs[1, i].plot(cumulative_pl.index, cumulative_pl['stock_PL'], color='cyan', marker='o', linestyle='-')
+        axs[1, i].set_title(f'Cumulative Stock P&L Over Time: Strategy {i+1}')
+        axs[1, i].set_xlabel('Date')
+        axs[1, i].set_ylabel('Cumulative Stock P&L ($)')
+        axs[1, i].grid(True)
+        
+        axs[2, i].plot(cumulative_pl.index, cumulative_pl['net_PL'], color='magenta', marker='o', linestyle='-')
+        axs[2, i].set_title(f'Cumulative Net P&L Over Time: Strategy {i+1}')
+        axs[2, i].set_xlabel('Date')
+        axs[2, i].set_ylabel('Cumulative Net P&L ($)')
+        axs[2, i].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_kapital_over_time(*cumulative_pls):
+    """
+    Plots initial capital and end capital over time for multiple trading strategies.
+    
+    Inputs:
+        cumulative_pls - Tuple of DataFrames, each with Date index and financial data including
+                         initial_kapital and end_kapital.
+    """
+    # Determine the number of trading strategies (dataframes)
+    num_strategies = len(cumulative_pls)
+    fig, axs = plt.subplots(2, num_strategies, figsize=(12 * num_strategies, 8), squeeze=False)  # Adjust for two rows
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        # Plot initial capital
+        axs[0, i].plot(cumulative_pl.index, cumulative_pl['initial_kapital'], color='blue', marker='o', linestyle='-')
+        axs[0, i].set_title(f'Initial Capital Over Time: Strategy {i+1}')  
+        axs[0, i].set_xlabel('Date')  
+        axs[0, i].set_ylabel('Initial Capital ($)')  
+        axs[0, i].grid(True)  
+
+        # Plot end capital
+        axs[1, i].plot(cumulative_pl.index, cumulative_pl['end_kapital'], color='red', marker='o', linestyle='-')
+        axs[1, i].set_title(f'End Capital Over Time: Strategy {i+1}')  
+        axs[1, i].set_xlabel('Date')  
+        axs[1, i].set_ylabel('End Capital ($)')  
+        axs[1, i].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_trades_and_test_stationarity(*cumulative_pls):
+    """
+    This function creates subplots for 'gross_option_trades' and 'gross_stock_trades' from multiple 'cumulative_pl' DataFrames.
+    It plots the original data along with their 5-day, 30-day, and 100-day rolling averages for each trading strategy.
+    Additionally, it performs the Augmented Dickey-Fuller (ADF) test on both datasets to test for stationarity and 
+    displays the test results (Test Statistic and P-Value) below each subplot.
+
+    Inputs:
+        cumulative_pls - Tuple of DataFrames with columns including 'gross_option_trades' and 'gross_stock_trades'.
+    """
+    num_strategies = len(cumulative_pls)
+    fig, axes = plt.subplots(2, num_strategies, figsize=(20, 10), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        # Plot for gross_option_trades
+        axes[0, i].plot(cumulative_pl['gross_option_trades'], label="Gross Option Trades")
+        axes[0, i].plot(cumulative_pl['gross_option_trades'].rolling(5).mean(), label="5-day MA")
+        axes[0, i].plot(cumulative_pl['gross_option_trades'].rolling(30).mean(), label="30-day MA")
+        axes[0, i].plot(cumulative_pl['gross_option_trades'].rolling(100).mean(), label="100-day MA")
+        axes[0, i].set_title(f"Strategy {i+1}: Gross Option Trades", fontsize=18)
+        axes[0, i].legend(fontsize=14)
+
+        # ADF test on gross_option_trades
+        adf_result_option = adfuller(cumulative_pl['gross_option_trades'].dropna(), maxlag=1)
+        axes[0, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_option[0]:.2f}\nP-Value: {adf_result_option[1]:.4f}', 
+                        transform=axes[0, i].transAxes, fontsize=14)
+
+        # Plot for gross_stock_trades
+        axes[1, i].plot(cumulative_pl['gross_stock_trades'], label="Gross Stock Trades")
+        axes[1, i].plot(cumulative_pl['gross_stock_trades'].rolling(5).mean(), label="5-day MA")
+        axes[1, i].plot(cumulative_pl['gross_stock_trades'].rolling(30).mean(), label="30-day MA")
+        axes[1, i].plot(cumulative_pl['gross_stock_trades'].rolling(100).mean(), label="100-day MA")
+        axes[1, i].set_title(f"Strategy {i+1}: Gross Stock Trades", fontsize=18)
+        axes[1, i].legend(fontsize=14)
+
+        # ADF test on gross_stock_trades
+        adf_result_stock = adfuller(cumulative_pl['gross_stock_trades'].dropna(), maxlag=1)
+        axes[1, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_stock[0]:.2f}\nP-Value: {adf_result_stock[1]:.4f}', 
+                        transform=axes[1, i].transAxes, fontsize=14)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_position_values_and_test_stationarity(*cumulative_pls):
+    """
+    This function creates subplots for 'option_pos_value' and 'stock_pos_value' from multiple 'cumulative_pl' DataFrames.
+    It plots the original data along with their 5-day, 30-day, and 100-day rolling averages for each trading strategy.
+    Additionally, it performs the Augmented Dickey-Fuller (ADF) test on both datasets to test for stationarity and 
+    displays the test results (Test Statistic and P-Value) below each subplot.
+
+    Inputs:
+        cumulative_pls - Tuple of DataFrames with columns including 'option_pos_value' and 'stock_pos_value'.
+    """
+    num_strategies = len(cumulative_pls)
+    fig, axes = plt.subplots(2, num_strategies, figsize=(20 * num_strategies, 10), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        # Plot for option_pos_value
+        axes[0, i].plot(cumulative_pl['option_pos_value'], label="Option Position Value")
+        axes[0, i].plot(cumulative_pl['option_pos_value'].rolling(5).mean(), label="5-day MA")
+        axes[0, i].plot(cumulative_pl['option_pos_value'].rolling(30).mean(), label="30-day MA")
+        axes[0, i].plot(cumulative_pl['option_pos_value'].rolling(100).mean(), label="100-day MA")
+        axes[0, i].set_title(f"Strategy {i+1}: Option Position Value", fontsize=18)
+        axes[0, i].legend(fontsize=14)
+
+        # Perform and display ADF test results for option_pos_value
+        adf_result_option = adfuller(cumulative_pl['option_pos_value'].dropna(), maxlag=1)
+        axes[0, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_option[0]:.2f}\nP-Value: {adf_result_option[1]:.4f}', 
+                        transform=axes[0, i].transAxes, fontsize=14)
+
+        # Plot for stock_pos_value
+        axes[1, i].plot(cumulative_pl['stock_pos_value'], label="Stock Position Value")
+        axes[1, i].plot(cumulative_pl['stock_pos_value'].rolling(5).mean(), label="5-day MA")
+        axes[1, i].plot(cumulative_pl['stock_pos_value'].rolling(30).mean(), label="30-day MA")
+        axes[1, i].plot(cumulative_pl['stock_pos_value'].rolling(100).mean(), label="100-day MA")
+        axes[1, i].set_title(f"Strategy {i+1}: Stock Position Value", fontsize=18)
+        axes[1, i].legend(fontsize=14)
+
+        # Perform and display ADF test results for stock_pos_value
+        adf_result_stock = adfuller(cumulative_pl['stock_pos_value'].dropna(), maxlag=1)
+        axes[1, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_stock[0]:.2f}\nP-Value: {adf_result_stock[1]:.4f}', 
+                        transform=axes[1, i].transAxes, fontsize=14)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_pl_values_and_test_stationarity(*cumulative_pls):
+    """
+    This function creates subplots for 'daily_option_PL', 'daily_stock_PL', and 'daily_net_PL' from multiple 'cumulative_pl' DataFrames.
+    It plots the original data along with their 5-day, 30-day, and 100-day rolling averages for each trading strategy.
+    Additionally, it performs the Augmented Dickey-Fuller (ADF) test on all three datasets to test for stationarity and 
+    displays the test results (Test Statistic and P-Value) below each subplot.
+
+    Inputs:
+        cumulative_pls - Tuple of DataFrames with columns including 'daily_option_PL', 'daily_stock_PL', and 'daily_net_PL'.
+    """
+    num_strategies = len(cumulative_pls)
+    fig, axes = plt.subplots(3, num_strategies, figsize=(20 * num_strategies, 15), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        # Plot for daily_option_PL
+        axes[0, i].plot(cumulative_pl['daily_option_PL'], label="Daily Option P&L")
+        axes[0, i].plot(cumulative_pl['daily_option_PL'].rolling(5).mean(), label="5-day MA")
+        axes[0, i].plot(cumulative_pl['daily_option_PL'].rolling(30).mean(), label="30-day MA")
+        axes[0, i].plot(cumulative_pl['daily_option_PL'].rolling(100).mean(), label="100-day MA")
+        axes[0, i].set_title(f"Strategy {i+1}: Option P&L", fontsize=18)
+        axes[0, i].legend(fontsize=14)
+
+        # Perform and display ADF test results for daily_option_PL
+        adf_result_option = adfuller(cumulative_pl['daily_option_PL'].dropna(), maxlag=1)
+        axes[0, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_option[0]:.2f}\nP-Value: {adf_result_option[1]:.4f}', 
+                        transform=axes[0, i].transAxes, fontsize=14)
+
+        # Plot for daily_stock_PL
+        axes[1, i].plot(cumulative_pl['daily_stock_PL'], label="Daily Stock P&L")
+        axes[1, i].plot(cumulative_pl['daily_stock_PL'].rolling(5).mean(), label="5-day MA")
+        axes[1, i].plot(cumulative_pl['daily_stock_PL'].rolling(30).mean(), label="30-day MA")
+        axes[1, i].plot(cumulative_pl['daily_stock_PL'].rolling(100).mean(), label="100-day MA")
+        axes[1, i].set_title(f"Strategy {i+1}: Stock P&L", fontsize=18)
+        axes[1, i].legend(fontsize=14)
+
+        # Perform and display ADF test results for daily_stock_PL
+        adf_result_stock = adfuller(cumulative_pl['daily_stock_PL'].dropna(), maxlag=1)
+        axes[1, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_stock[0]:.2f}\nP-Value: {adf_result_stock[1]:.4f}', 
+                        transform=axes[1, i].transAxes, fontsize=14)
+
+        # Plot for daily_net_PL
+        axes[2, i].plot(cumulative_pl['daily_net_PL'], label="Daily Net P&L")
+        axes[2, i].plot(cumulative_pl['daily_net_PL'].rolling(5).mean(), label="5-day MA")
+        axes[2, i].plot(cumulative_pl['daily_net_PL'].rolling(30).mean(), label="30-day MA")
+        axes[2, i].plot(cumulative_pl['daily_net_PL'].rolling(100).mean(), label="100-day MA")
+        axes[2, i].set_title(f"Strategy {i+1}: Net P&L", fontsize=18)
+        axes[2, i].legend(fontsize=14)
+
+        # Perform and display ADF test results for daily_net_PL
+        adf_result_net = adfuller(cumulative_pl['daily_net_PL'].dropna(), maxlag=1)
+        axes[2, i].text(0.01, -0.3, f'ADF Statistic: {adf_result_net[0]:.2f}\nP-Value: {adf_result_net[1]:.4f}', 
+                        transform=axes[2, i].transAxes, fontsize=14)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_correlations(*cumulative_pls):
+    """
+    Creates subplots for each trading strategy, each displaying the correlation between two specific variables:
+    1. Gross option trades vs. gross stock trades
+    2. Option position value vs. stock position value
+    3. Option P&L vs. Stock P&L
+
+    Inputs:
+        cumulative_pls - Tuple of DataFrames with required financial columns.
+    """
+    num_strategies = len(cumulative_pls)
+    fig, axes = plt.subplots(3, num_strategies, figsize=(8 * num_strategies, 15), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        # Correlation and plot for gross_option_trades and gross_stock_trades
+        correlation1 = cumulative_pl['gross_option_trades'].corr(cumulative_pl['gross_stock_trades'])
+        axes[0, i].scatter(cumulative_pl['gross_option_trades'], cumulative_pl['gross_stock_trades'],
+                           label=f'Correlation: {correlation1:.2f}', color='blue', alpha=0.7)
+        axes[0, i].set_xlabel('Gross Option Trades')
+        axes[0, i].set_ylabel('Gross Stock Trades')
+        axes[0, i].set_title(f'Strategy {i+1}: Gross Option vs. Stock Trades')
+        axes[0, i].legend()
+        axes[0, i].grid(True)
+
+        # Correlation and plot for option_pos_value and stock_pos_value
+        correlation2 = cumulative_pl['option_pos_value'].corr(cumulative_pl['stock_pos_value'])
+        axes[1, i].scatter(cumulative_pl['option_pos_value'], cumulative_pl['stock_pos_value'],
+                           label=f'Correlation: {correlation2:.2f}', color='red', alpha=0.7)
+        axes[1, i].set_xlabel('Option Position Value')
+        axes[1, i].set_ylabel('Stock Position Value')
+        axes[1, i].set_title(f'Strategy {i+1}: Option vs. Stock Position Values')
+        axes[1, i].legend()
+        axes[1, i].grid(True)
+
+        # Correlation and plot for option_PL and stock_PL
+        correlation3 = cumulative_pl['daily_option_PL'].corr(cumulative_pl['daily_stock_PL'])
+        axes[2, i].scatter(cumulative_pl['daily_option_PL'], cumulative_pl['daily_stock_PL'],
+                           label=f'Correlation: {correlation3:.2f}', color='green', alpha=0.7)
+        axes[2, i].set_xlabel('Daily Option P&L')
+        axes[2, i].set_ylabel('Daily Stock P&L')
+        axes[2, i].set_title(f'Strategy {i+1}: Daily Option vs. Stock P&L')
+        axes[2, i].legend()
+        axes[2, i].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_correlation_matrices(*cumulative_pls, fff_data):
+    """
+    Merges each cumulative_pl DataFrame from multiple trading strategies with fff_data DataFrame based on date indices,
+    and creates subplots showing correlation matrices between selected financial metrics from each cumulative_pl
+    and Fama-French factors from fff_data.
+
+    Parameters:
+        cumulative_pls (tuple of DataFrames): Financial metrics data from multiple strategies.
+        fff_data (DataFrame): Fama-French factors data.
+    """
+    num_strategies = len(cumulative_pls)
+    fig, axes = plt.subplots(num_strategies, 3, figsize=(30, 10 * num_strategies), squeeze=False)
+
+    for i, cumulative_pl in enumerate(cumulative_pls):
+        combined_df = cumulative_pl.merge(fff_data, left_index=True, right_index=True, how='left')
+
+        subset1 = combined_df[['gross_option_trades', 'option_pos_value', 'daily_option_PL', 'Mkt-RF', 'SMB', 'HML']]
+        subset2 = combined_df[['gross_stock_trades', 'stock_pos_value', 'daily_stock_PL', 'Mkt-RF', 'SMB', 'HML']]
+        subset3 = combined_df[['gross_trades_value', 'daily_net_PL', 'Mkt-RF', 'SMB', 'HML']]
+
+        # Correlation matrix for the first subset
+        correlation_matrix1 = subset1.corr()
+        sns.heatmap(correlation_matrix1, annot=True, fmt=".2f", cmap='coolwarm',
+                    square=True, linewidths=.5, cbar_kws={"shrink": .5}, ax=axes[i, 0])
+        axes[i, 0].set_title(f'Strategy {i+1}: Options Data vs Fama-French Factors')
+
+        # Correlation matrix for the second subset
+        correlation_matrix2 = subset2.corr()
+        sns.heatmap(correlation_matrix2, annot=True, fmt=".2f", cmap='coolwarm',
+                    square=True, linewidths=.5, cbar_kws={"shrink": .5}, ax=axes[i, 1])
+        axes[i, 1].set_title(f'Strategy {i+1}: Stocks Data vs Fama-French Factors')
+
+        # Correlation matrix for the third subset
+        correlation_matrix3 = subset3.corr()
+        sns.heatmap(correlation_matrix3, annot=True, fmt=".2f", cmap='coolwarm',
+                    square=True, linewidths=.5, cbar_kws={"shrink": .5}, ax=axes[i, 2])
+        axes[i, 2].set_title(f'Strategy {i+1}: Gross Trades & Net P&L vs Fama-French Factors')
+
+    plt.tight_layout()
+    plt.show()
+
+def run_regression_option_PL(*combined_dfs):
+    """
+    Performs linear regression using the Fama-French three factors as independent variables
+    and option_PL from each combined_df as the dependent variable.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include option_PL and the Fama-French factors.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        X = combined_df[['Mkt-RF', 'SMB', 'HML']]
+        X = sm.add_constant(X)  # Adds a constant term to the predictor
+
+        y = combined_df['option_PL']
+
+        model = sm.OLS(y, X).fit()
+
+        print(f'Strategy {i+1}: R-squared of the regression of option_PL on the Fama-French factors: {round(model.rsquared, 6)}\n')
+        print(f'Strategy {i+1} regression summary:\n{model.summary()}\n{"-"*100}\n')
+
+def run_regression_stock_PL(*combined_dfs):
+    """
+    Performs linear regression using the Fama-French three factors as independent variables
+    and stock_PL from each combined_df as the dependent variable.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include stock_PL and the Fama-French factors.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        X = combined_df[['Mkt-RF', 'SMB', 'HML']]
+        X = sm.add_constant(X)  # Adds a constant term to the predictor
+
+        y = combined_df['stock_PL']
+
+        model = sm.OLS(y, X).fit()
+
+        print(f'Strategy {i+1}: R-squared of the regression of stock_PL on the Fama-French factors: {round(model.rsquared, 6)}\n')
+        print(f'Strategy {i+1} regression summary:\n{model.summary()}\n{"-"*100}\n')
+
+def run_regression_net_PL(*combined_dfs):
+    """
+    Performs linear regression using the Fama-French three factors as independent variables
+    and net_PL from each combined_df as the dependent variable.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include net_PL and the Fama-French factors.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        X = combined_df[['Mkt-RF', 'SMB', 'HML']]
+        X = sm.add_constant(X)  # Adds a constant term to the predictor
+
+        y = combined_df['net_PL']
+
+        model = sm.OLS(y, X).fit()
+
+        print(f'Strategy {i+1}: R-squared of the regression of net_PL on the Fama-French factors: {round(model.rsquared, 6)}\n')
+        print(f'Strategy {i+1} regression summary:\n{model.summary()}\n{"-"*100}\n')
+
+def plot_rolling_volatility(*combined_dfs, window_size=30):
+    """
+    Calculates and plots the rolling standard deviation of returns (volatility)
+    from the net profit and loss (net_PL) of multiple trading strategies.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include the net_PL column.
+        window_size (int): The window size for calculating rolling volatility (default is 30 days).
+    """
+    fig, axes = plt.subplots(len(combined_dfs), 1, figsize=(14, 7 * len(combined_dfs)), squeeze=False)
+
+    for i, combined_df in enumerate(combined_dfs):
+        if 'net_PL' not in combined_df.columns:
+            raise ValueError("DataFrame must contain a 'net_PL' column")
+
+        combined_df['daily_returns'] = combined_df['net_PL'].pct_change()
+        combined_df['rolling_volatility'] = combined_df['daily_returns'].rolling(window=window_size).std()
+
+        axes[i, 0].plot(combined_df.index, combined_df['rolling_volatility'], label=f'{window_size}-Day Rolling Volatility')
+        axes[i, 0].set_title(f'Strategy {i+1}: Volatility Clustering - {window_size}-Day Rolling Volatility of Returns')
+        axes[i, 0].set_xlabel('Date')
+        axes[i, 0].set_ylabel('Rolling Volatility')
+        axes[i, 0].legend()
+        axes[i, 0].grid(True)
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_pnl_distribution(*combined_dfs):
+    """
+    Creates histograms and density plots for the distribution of daily and monthly P&L 
+    from multiple trading strategies, based on the net_PL column of each combined_df DataFrame.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include the net_PL column.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        if 'net_PL' not in combined_df.columns:
+            raise ValueError("DataFrame must contain a 'net_PL' column")
+
+        combined_df['daily_pnl'] = combined_df['net_PL'].diff()
+        combined_df['monthly_pnl'] = combined_df['net_PL'].resample('M').last().diff()
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
+        fig.suptitle(f'Strategy {i+1}: Profit and Loss Distribution')
+
+        sns.histplot(combined_df['daily_pnl'].dropna(), bins=50, kde=True, ax=axes[0, 0])
+        axes[0, 0].set_title('Daily P&L Distribution')
+        axes[0, 0].set_xlabel('Daily P&L')
+        axes[0, 0].set_ylabel('Frequency')
+
+        sns.kdeplot(combined_df['daily_pnl'].dropna(), ax=axes[0, 1], fill=True)
+        axes[0, 1].set_title('Daily P&L Density')
+        axes[0, 1].set_xlabel('Daily P&L')
+        axes[0, 1].set_ylabel('Density')
+
+        sns.histplot(combined_df['monthly_pnl'].dropna(), bins=50, kde=True, ax=axes[1, 0])
+        axes[1, 0].set_title('Monthly P&L Distribution')
+        axes[1, 0].set_xlabel('Monthly P&L')
+        axes[1, 0].set_ylabel('Frequency')
+
+        sns.kdeplot(combined_df['monthly_pnl'].dropna(), ax=axes[1, 1], fill=True)
+        axes[1, 1].set_title('Monthly P&L Density')
+        axes[1, 1].set_xlabel('Monthly P&L')
+        axes[1, 1].set_ylabel('Density')
+
+        plt.show()
+
+def plot_trade_activity_comparison(*combined_dfs, frequency='D'):
+    """
+    Creates bar charts to compare 'gross_option_trades' and 'gross_stock_trades' based on the specified frequency
+    for multiple trading strategies, without displaying x-axis labels.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include 'gross_option_trades' and 'gross_stock_trades' columns.
+        frequency (str): Frequency for resampling data. 'D' for daily, 'W' for weekly.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        resampled_data = combined_df[['gross_option_trades', 'gross_stock_trades']].resample(frequency).sum()
+
+        # Plotting
+        plt.figure(figsize=(14, 7))
+        resampled_data.plot(kind='bar', width=0.8)
+        plt.title(f'Strategy {i+1}: Comparison of Trading Activity (Frequency: {frequency})')
+        plt.xlabel('Date')
+        plt.ylabel('Volume of Trades')
+        plt.legend(['Gross Option Trades', 'Gross Stock Trades'])
+        plt.grid(axis='y', linestyle='--')
+        
+        # Remove x-axis labels
+        plt.xticks(ticks=[], labels=[])  # Remove x-axis tick labels
+
+        plt.show()
+
+def plot_pl_boxplots(combined_df):
+    """
+    Creates box plots to visualize the distribution, median, and outliers of 'option_PL', 
+    'stock_PL', and 'net_PL' from the combined_df DataFrame.
+
+    Parameters:
+        combined_df (DataFrame): A DataFrame that includes 'option_PL', 'stock_PL', and 'net_PL' columns.
+    """
+    plt.figure(figsize=(10, 6))
+
+    pl_data = combined_df[['option_PL', 'stock_PL', 'net_PL']]
+    pl_data_melted = pl_data.melt(var_name='Type', value_name='P&L')
+
+    sns.boxplot(x='Type', y='P&L', data=pl_data_melted)
+    
+    plt.title('Distribution of P&L for Options, Stocks, and Net')
+    plt.xlabel('P&L Type')
+    plt.ylabel('Profit and Loss')
+    plt.grid(axis='y', linestyle='--')
+
+    plt.show()
+
+def plot_pl_boxplots(*combined_dfs):
+    """
+    Creates box plots to visualize the distribution, median, and outliers of 'option_PL', 
+    'stock_PL', and 'net_PL' from multiple combined_df DataFrames.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include 'option_PL', 'stock_PL', and 'net_PL' columns.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        plt.figure(figsize=(10, 6))
+
+        pl_data = combined_df[['option_PL', 'stock_PL', 'net_PL']]
+        pl_data_melted = pl_data.melt(var_name='Type', value_name='P&L')
+
+        sns.boxplot(x='Type', y='P&L', data=pl_data_melted)
+        
+        plt.title(f'Strategy {i+1}: Distribution of P&L for Options, Stocks, and Net')
+        plt.xlabel('P&L Type')
+        plt.ylabel('Profit and Loss')
+        plt.grid(axis='y', linestyle='--')
+
+        plt.show()
+
+def calculate_profit_factor_analysis(*combined_dfs):
+    """
+    Calculates and analyzes the profit factor (total gains / total losses) for both options and stocks
+    from multiple combined_df DataFrames.
+
+    Parameters:
+        combined_dfs (tuple of DataFrames): DataFrames that each include 'daily_option_PL' and 'daily_stock_PL' columns.
+    """
+    for i, combined_df in enumerate(combined_dfs):
+        if 'daily_option_PL' not in combined_df.columns or 'daily_stock_PL' not in combined_df.columns:
+            raise ValueError(f"DataFrame for Strategy {i+1} must contain both 'daily_option_PL' and 'daily_stock_PL' columns")
+
+        # Calculate total gains and total losses for options
+        option_gains = combined_df[combined_df['daily_option_PL'] > 0]['daily_option_PL'].sum()
+        option_losses = combined_df[combined_df['daily_option_PL'] < 0]['daily_option_PL'].sum()
+
+        # Avoid division by zero and negative values for losses
+        if option_losses == 0:
+            option_profit_factor = 'Infinity'  # No losses
+        else:
+            option_profit_factor = option_gains / abs(option_losses)
+
+        # Calculate total gains and total losses for stocks
+        stock_gains = combined_df[combined_df['daily_stock_PL'] > 0]['daily_stock_PL'].sum()
+        stock_losses = combined_df[combined_df['daily_stock_PL'] < 0]['daily_stock_PL'].sum()
+
+        # Avoid division by zero and negative values for losses
+        if stock_losses == 0:
+            stock_profit_factor = 'Infinity'  # No losses
+        else:
+            stock_profit_factor = stock_gains / abs(stock_losses)
+
+        print(f"Strategy {i+1}: Option Profit Factor: {option_profit_factor}")
+        print(f"Strategy {i+1}: Stock Profit Factor: {stock_profit_factor}\n")
+
+def plot_cum_net_pl_and_spy_returns(combined_1, combined_2, combined_3, spydata):
+
+    # Ensure that the index is datetime
+    combined_1.index = pd.to_datetime(combined_1.index)
+    combined_2.index = pd.to_datetime(combined_2.index)
+    combined_3.index = pd.to_datetime(combined_3.index)
+    spydata.index = pd.to_datetime(spydata.index)
+    
+    # Create a new figure and set its size
+    plt.figure(figsize=(14, 8))
+    
+    # Plotting
+    plt.plot(combined_1.index, combined_1['net_PL'], label='Strategy 1 Net P&L', alpha=0.7)
+    plt.plot(combined_2.index, combined_2['net_PL'], label='Strategy 2 Net P&L', alpha=0.7)
+    plt.plot(combined_3.index, combined_3['net_PL'], label='Strategy 3 Net P&L', alpha=0.7)
+    plt.plot(spydata.index, spydata['spy_return'], label='SPY Returns', alpha=0.7)
+    
+    # Adding legend
+    plt.legend()
+    
+    # Adding title and labels
+    plt.title('Net P&L and SPY Returns Over Time')
+    plt.xlabel('Date')
+    plt.ylabel('Net P&L / Returns')
+    
+    # Show plot
+    plt.show()
+
+def plot_daily_net_pl_and_spy_returns(combined_1, combined_2, combined_3, spydata):
+    # Ensure that the index is datetime
+    combined_1.index = pd.to_datetime(combined_1.index)
+    combined_2.index = pd.to_datetime(combined_2.index)
+    combined_3.index = pd.to_datetime(combined_3.index)
+    spydata.index = pd.to_datetime(spydata.index)
+    
+    # Create a new figure and set its size
+    plt.figure(figsize=(14, 8))
+    
+    # Plotting
+    plt.plot(combined_1.index, combined_1['daily_net_PL'], label='Strategy 1 Daily Net P&L', alpha=0.7)
+    plt.plot(combined_2.index, combined_2['daily_net_PL'], label='Strategy 2 Daily Net P&L', alpha=0.7)
+    plt.plot(combined_3.index, combined_3['daily_net_PL'], label='Strategy 3 Daily Net P&L', alpha=0.7)
+    plt.plot(spydata.index, spydata['returns'], label='SPY Daily Returns', alpha=0.7)
+    
+    # Adding legend
+    plt.legend()
+    
+    # Adding title and labels
+    plt.title('Daily Net P&L and SPY Returns Over Time')
+    plt.xlabel('Date')
+    plt.ylabel('Net P&L / Returns')
+    
+    # Show plot
+    plt.show()
+
+def plot_net_pos_val(combined_1, combined_2, combined_3):
+    """
+    Plots net position value over time for three trading strategies.
+
+    Parameters:
+        combined_1, combined_2, combined_3 (DataFrame): DataFrames each with Date index and 'net_pos_val' column.
+    """
+
+    # Ensure that the index is datetime
+    combined_1.index = pd.to_datetime(combined_1.index)
+    combined_2.index = pd.to_datetime(combined_2.index)
+    combined_3.index = pd.to_datetime(combined_3.index)
+    
+    # Create a new figure and set its size
+    plt.figure(figsize=(14, 8))
+    
+    # Plotting
+    plt.plot(combined_1.index, combined_1['net_pos_value'], label='Strategy 1 Net Position Value', alpha=0.7)
+    plt.plot(combined_2.index, combined_2['net_pos_value'], label='Strategy 2 Net Position Value', alpha=0.7)
+    plt.plot(combined_3.index, combined_3['net_pos_value'], label='Strategy 3 Net Position Value', alpha=0.7)
+    
+    # Adding legend
+    plt.legend()
+    
+    # Adding title and labels
+    plt.title('Net Position Value Over Time')
+    plt.xlabel('Date')
+    plt.ylabel('Net Position Value ($)')
+    
+    # Show plot
+    plt.show()
+
 # ============================================
+    
+# Appendices
+
 # ============================================
 # ============================================
 
