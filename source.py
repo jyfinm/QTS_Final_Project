@@ -1744,4 +1744,56 @@ def max_dd(returns):
     max_drawdown_value = np.abs(returns.values[j] - returns.values[i]) / returns.values[j]
     print(max_drawdown_value)
     return max_drawdown_value
+    
+def combined_performance_metrics(spydata, *dfs, rfr=0.01):
+    """
+    Calculate traditional and regression-based performance metrics for multiple trading strategies against a given benchmark.
 
+    Args:
+        spydata (DataFrame): A DataFrame representing benchmark data, must contain 'returns' column for daily returns.
+        *dfs (DataFrame): Variable length DataFrame list, each representing a different trading strategy.
+                          Each DataFrame should contain at least 'daily_net_PL' and 'initial_kapital' columns.
+        rfr (float): Annual risk-free rate of return, default is 0.01 (1%).
+
+    Returns:
+        DataFrame: A DataFrame containing calculated performance metrics for each trading strategy,
+                   with the strategy as the index and metrics rounded to six decimal places, except for Beta which is rounded to eight decimal places.
+    """
+    if 'returns' not in spydata.columns:
+        raise ValueError("Benchmark data must contain 'returns' column")
+    benchmark_returns_monthly = spydata['returns'].resample('M').mean()
+
+    metrics_dict = {}
+
+    for idx, df in enumerate(dfs, start=1):
+        if not {'daily_net_PL', 'initial_kapital'}.issubset(df.columns):
+            raise ValueError(f"DataFrame {idx} is missing required columns.")
+
+        df['daily_returns'] = df['daily_net_PL'] / df['initial_kapital']
+        annualized_return = df['daily_returns'].mean() * 252
+        annualized_volatility = df['daily_returns'].std() * np.sqrt(252)
+        sharpe_ratio = (annualized_return - rfr) / annualized_volatility
+
+        fund_ret_monthly = df['daily_returns'].resample('M').mean()
+        X = sm.add_constant(benchmark_returns_monthly)  
+        y = fund_ret_monthly
+        model = sm.OLS(y, X, missing='drop').fit()
+        beta = round(float(model.params[1]), 8)  
+        alpha = round(float(model.params[0]), 6)
+        tracking_error = round(model.resid.std() * np.sqrt(12), 6)
+        information_ratio = round(alpha / tracking_error, 6) if tracking_error != 0 else np.nan
+        r_squared = round(model.rsquared, 6)
+
+        metrics_dict[f'Strategy {idx}'] = {
+            'Annualized Return': round(annualized_return, 6),
+            'Annualized Volatility': round(annualized_volatility, 6),
+            'Sharpe Ratio': round(sharpe_ratio, 6),
+            'Beta': beta,  
+            'Information Ratio': information_ratio,
+            'Alpha': alpha,
+            'R-squared': r_squared,
+            'Tracking Error': tracking_error
+        }
+
+    metrics_df = pd.DataFrame(metrics_dict).T
+    return metrics_df
