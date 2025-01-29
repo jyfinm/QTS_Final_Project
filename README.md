@@ -35,3 +35,5 @@ Delta appeared less impactful due to the benefits of daily rebalancing, which ge
 The analysis supports the hypothesis that long option positions are generally unprofitable on their own due to options pricing IV higher than RV. Short option positions, as expected, performed well under our simulation conditions. By closing a week before expiration, we avoid the high risk associated with being short gamma (acceptable max drawdown). The effect of delta was mitigated by daily rebalancing, confirming the efficiency of our strategy in scalping gamma.
 
 While using model-free IV reduced overall profitability, it also eliminated outliers, contributing to a more stable, though less profitable, strategy. However, focusing exclusively on short gamma positions, and avoiding positions when the threshold is not met, showed better performance, indicating the potential effectiveness of a selective strategy approach.
+
+Next steps would include completing a walk-forward analysis that determines thresholds on a rolling basis and to investigate areas where model-free IV spikes.
