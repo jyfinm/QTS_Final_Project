@@ -18,7 +18,7 @@ We use a delta-hedged straddle approach to manage our positions, seeking to mini
 
 All dependencies and functions are imported via a source file, ensuring that the notebook remains clean and focused on the strategy logic.
 
-## Results
+## 3. Results
 
 Our simulation results indicate varied performance across different strategies:
 
@@ -30,7 +30,7 @@ Our simulation results indicate varied performance across different strategies:
 
 Delta appeared less impactful due to the benefits of daily rebalancing, which generally outweighed the transaction costs. Using model-free implied volatility for deciding positions showed a decrease in overall profitability but removed some extreme performances, both positive and negative.
 
-## Conclusions
+## 4. Conclusions
 
 The analysis supports the hypothesis that long option positions are generally unprofitable on their own due to options pricing IV higher than RV. Short option positions, as expected, performed well under our simulation conditions. By closing a week before expiration, we avoid the high risk associated with being short gamma (acceptable max drawdown). The effect of delta was mitigated by daily rebalancing, confirming the efficiency of our strategy in scalping gamma.
 
